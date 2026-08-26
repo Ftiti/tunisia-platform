@@ -1,0 +1,192 @@
+services:
+
+  auth-service:
+    build: ./auth-service
+    container_name: tunisia_auth
+    volumes:
+      - ./auth-service:/var/www
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: tunisia_postgres
+      DB_PORT: 5432
+      DB_DATABASE: tunisia_platform
+      DB_USERNAME: tunisia
+      DB_PASSWORD: secret123
+      REDIS_HOST: tunisia_redis
+      REDIS_PORT: 6379
+
+  booking-service:
+    build: ./booking-service
+    container_name: tunisia_booking
+    volumes:
+      - ./booking-service:/var/www
+    depends_on:
+      - postgres
+      - redis
+      - auth-service
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: tunisia_postgres
+      DB_PORT: 5432
+      DB_DATABASE: tunisia_platform
+      DB_USERNAME: tunisia
+      DB_PASSWORD: secret123
+      REDIS_HOST: tunisia_redis
+      REDIS_PORT: 6379
+    ports:
+      - "8001:8001"
+
+  provider-service:
+    build: ./provider-service
+    container_name: tunisia_provider
+    volumes:
+      - ./provider-service:/var/www
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: tunisia_postgres
+      DB_PORT: 5432
+      DB_DATABASE: tunisia_providers
+      DB_USERNAME: tunisia
+      DB_PASSWORD: secret123
+      REDIS_HOST: tunisia_redis
+      REDIS_PORT: 6379
+      CACHE_DRIVER: redis
+      QUEUE_CONNECTION: sync
+    ports:
+      - "8002:8002"
+
+  ai-service:
+    build: ./ai-service
+    container_name: tunisia_ai
+    volumes:
+      - ./ai-service:/var/www
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - postgres
+      - redis
+      - provider-service
+      - booking-service
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: tunisia_postgres
+      DB_PORT: 5432
+      DB_DATABASE: tunisia_ai
+      DB_USERNAME: tunisia
+      DB_PASSWORD: secret123
+      REDIS_HOST: tunisia_redis
+      REDIS_PORT: 6379
+      REDIS_CLIENT: predis
+      CACHE_DRIVER: redis
+      QUEUE_CONNECTION: sync
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL_CHAT: mistral:7b
+      OLLAMA_MODEL_CLASSIFY: mistral:7b
+      OLLAMA_MODEL_RECOMMEND: llama3.1:8b
+      PROVIDER_SERVICE_URL: http://tunisia_provider:8002/api/v1
+      BOOKING_SERVICE_URL: http://tunisia_booking:8001/api
+    ports:
+      - "8003:8003"
+
+  back-office:
+    build: ./back-office
+    container_name: tunisia_backoffice
+    ports:
+      - "4200:80"
+    depends_on:
+      - auth-service
+
+
+  # PostgreSQL + PostGIS — base de données principale
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: tunisia_postgres
+    environment:
+      POSTGRES_DB: tunisia_platform
+      POSTGRES_USER: tunisia
+      POSTGRES_PASSWORD: secret123
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+
+  # Redis — cache + queues
+  redis:
+    image: redis:alpine
+    container_name: tunisia_redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+
+  # RabbitMQ — messaging entre microservices
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: tunisia_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: tunisia
+      RABBITMQ_DEFAULT_PASS: secret123
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  # Elasticsearch — recherche intelligente
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    container_name: tunisia_elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
+  # Kibana — interface Elasticsearch
+  kibana:
+    image: kibana:8.11.0
+    container_name: tunisia_kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+
+  # Nginx — API Gateway
+  nginx:
+    image: nginx:alpine
+    container_name: tunisia_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./auth-service:/var/www
+    depends_on:
+      - auth-service
+      - booking-service
+      - provider-service
+      - ai-service
+
+  # Adminer — interface BDD
+  adminer:
+    image: adminer
+    container_name: tunisia_adminer
+    ports:
+      - "8090:8080"
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  elasticsearch_data:
